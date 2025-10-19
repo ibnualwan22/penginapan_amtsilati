@@ -130,3 +130,36 @@ export async function deleteRoom(roomId) {
     return { success: false, message: 'Terjadi kesalahan server.' };
   }
 }
+export async function updateRoomPhotos(roomId, photoPaths) {
+  if (!roomId || !Array.isArray(photoPaths)) {
+    return { success: false, message: 'Data tidak valid.' };
+  }
+
+  try {
+    // Ambil path foto yang sudah ada
+    const room = await prisma.room.findUnique({
+      where: { id: roomId },
+      select: { photos: true },
+    });
+
+    if (!room) {
+      return { success: false, message: 'Kamar tidak ditemukan.' };
+    }
+
+    // Gabungkan path lama dengan path baru (maksimal 3 foto)
+    const existingPhotos = room.photos || [];
+    const updatedPhotos = [...existingPhotos, ...photoPaths].slice(0, 3); // Ambil 3 pertama
+
+    await prisma.room.update({
+      where: { id: roomId },
+      data: { photos: updatedPhotos },
+    });
+
+    revalidatePath('/admin/kamar');
+    return { success: true, message: 'Foto berhasil diperbarui.' };
+
+  } catch (error) {
+    console.error('Gagal update foto kamar:', error);
+    return { success: false, message: 'Gagal menyimpan path foto.' };
+  }
+}
