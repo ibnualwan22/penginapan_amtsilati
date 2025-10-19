@@ -1,0 +1,249 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+datasource db {
+  provider = "postgresql" // Sesuai database Anda
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ======================================
+// MODEL UTAMA (CORE MODELS)
+// ======================================
+
+// Model untuk Properti (Raudhatul Jannah & Raudhatul Muta'alimin)
+model Property {
+  id    String @id @default(cuid())
+  name  String @unique // "Raudhatul Jannah" atau "Raudhatul Muta'alimin"
+  isFree Boolean @default(false) // Menandakan properti gratis atau tidak
+
+  // Relasi: Satu properti punya banyak...
+  users    User[] // User/Staf
+  rooms    Room[] // Kamar
+  roomTypes RoomType[] // Tipe Kamar (hanya untuk RM)
+  fineItems FineItem[] // Item Denda (hanya untuk RM)
+  bookings Booking[]  // Booking/Pemesanan
+  settings PropertySettings? // Pengaturan Denda (hanya untuk RM)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Model untuk User (Super Admin, Admin RJ, Admin RM, Penerima Tamu)
+model User {
+  id       String  @id @default(cuid())
+  name     String  // Nama lengkap staf
+  username String  @unique // Username untuk login
+  password String  // Akan kita hash (amankan)
+
+  // Relasi: User termasuk dalam satu Role
+  role   Role   @relation(fields: [roleId], references: [id])
+  roleId String
+
+  // Relasi: User ditugaskan di satu Properti (bisa null untuk Super Admin)
+  property   Property? @relation(fields: [propertyId], references: [id])
+  propertyId String?
+
+  // Relasi: User yang melakukan check-in dan check-out
+  checkIns Booking[] @relation("CheckInBy")
+  checkOuts Booking[] @relation("CheckOutBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Model untuk Role (Hak Akses)
+model Role {
+  id          String @id @default(cuid())
+  name        String @unique // "Super Admin", "Admin RM", "Penerima Tamu RJ"
+  
+  // Nanti kita akan tambahkan field 'permissions' (JSON) di sini saat membangun fitur Manajemen Role
+  
+  // Relasi: Satu role bisa dimiliki banyak user
+  users User[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+
+// ======================================
+// MODEL UNTUK KAMAR (ROOM MODELS)
+// ======================================
+
+// Status Kamar (Tersedia, Terisi, Perbaikan/Dibersihkan)
+enum RoomStatus {
+  AVAILABLE // Tersedia
+  OCCUPIED  // Terisi
+  MAINTENANCE // Perbaikan / Sedang Dibersihkan
+}
+
+// Model untuk Tipe Kamar (Standar, Special, dll.)
+model RoomType {
+  id    String @id @default(cuid())
+  name  String // "Standar", "Special"
+
+  // Harga paket berdasarkan tipe kamar
+  priceHalfDay Decimal @default(0) // Harga 1/2 hari
+  priceFullDay Decimal @default(0) // Harga 1 hari
+
+  lateFeePerHour Decimal @default(20000)  // Denda Per Jam
+  lateFeeHalfDay Decimal @default(0) // Denda Paket Setengah Hari
+  lateFeeFullDay Decimal @default(0) // Denda Paket Satu Hari
+
+  // Relasi: Tipe kamar ini milik properti mana (hanya RM)
+  property   Property @relation(fields: [propertyId], references: [id])
+  propertyId String
+
+  // Relasi: Satu tipe kamar bisa dipakai banyak kamar
+  rooms Room[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([name, propertyId]) // <-- TAMBAHKAN BARIS INI
+}
+
+// Model untuk Kamar
+model Room {
+  id         String     @id @default(cuid())
+  roomNumber String     // Nomor atau Nama Kamar
+  status     RoomStatus @default(AVAILABLE) // Status kamar
+  photos     String[]   @default([]) // <-- TAMBAHKAN BARIS INI
+
+  // Relasi: Kamar ini milik properti mana
+  property   Property @relation(fields: [propertyId], references: [id])
+  propertyId String
+
+  // Relasi: Kamar ini tipenya apa (bisa null untuk properti RJ)
+  roomType   RoomType? @relation(fields: [roomTypeId], references: [id])
+  roomTypeId String?
+
+  // Relasi: Satu kamar bisa punya banyak riwayat booking
+  bookings Booking[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@unique([propertyId, roomNumber]) // Pastikan nomor kamar unik per properti
+}
+
+
+// ======================================
+// MODEL UNTUK DENDA (FINE MODELS - RM)
+// ======================================
+
+// Model untuk item denda (Bantal, Selimut, dll.)
+model FineItem {
+  id    String  @id @default(cuid())
+  name  String  @unique // "Bantal", "Selimut", "Sajadah"
+  price Decimal // Harga denda item
+
+  // Relasi: Item denda ini milik properti mana (hanya RM)
+  property   Property @relation(fields: [propertyId], references: [id])
+  propertyId String
+
+  // Relasi: Denda ini bisa diterapkan di banyak booking
+  appliedToBookings AppliedFineItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Model untuk menyimpan pengaturan denda keterlambatan per properti (RM)
+model PropertySettings {
+  id               String   @id @default(cuid())
+
+  // Relasi: Pengaturan ini unik untuk satu properti
+  property   Property @relation(fields: [propertyId], references: [id])
+  propertyId String   @unique
+}
+
+
+// ======================================
+// MODEL BOOKING & PEMBAYARAN
+// ======================================
+
+// Pilihan Metode Pembayaran
+enum PaymentMethod {
+  CASH
+  TRANSFER
+}
+
+// Status Pembayaran
+enum PaymentStatus {
+  NOT_PAID      // Belum Bayar
+  DOWN_PAYMENT  // Bayar Dimuka
+  PAID          // Lunas
+}
+
+// Model utama untuk Booking / Tamu Menginap
+// Ini akan jadi "Daftar Tamu Aktif" dan "Laporan"
+model Booking {
+  id     String  @id @default(cuid())
+  isActive Boolean @default(true) // True = Tamu Aktif, False = Riwayat/Laporan
+
+  // --- Info Tamu ---
+  guestName    String  // Nama tamu/wali
+  guestPhone   String  // WA wali
+  guestAddress String  // Alamat wali (hasil dari API)
+  
+  // --- Info Santri (Opsional) ---
+  santriName     String? // Nama santri
+  santriDetails  Json?   // Untuk simpan preview (gender, alamat, asrama)
+
+  // --- Info Waktu ---
+  checkInTime          DateTime // Jam dia check-in
+  expectedCheckOutTime DateTime // Ekspektasi cek-out (untuk hitung denda)
+  actualCheckOutTime   DateTime? // Jam dia check-out (diisi saat checkout)
+
+  // --- Info Pembayaran (Hanya untuk RM) ---
+  duration            Decimal? // Durasi menginap (misal 3.5 hari)
+  paymentMethod       PaymentMethod? // Metode bayar
+  paymentStatus       PaymentStatus? // Status bayar
+  downPaymentAmount   Decimal?       // Nominal bayar dimuka
+
+  totalBasePrice      Decimal? // Total harga paket
+  totalLateFee        Decimal? // Total denda keterlambatan
+  totalFineItemsAmount Decimal? // Total denda barang
+  grandTotal          Decimal? // Total tagihan akhir
+
+  // --- Relasi ---
+  property   Property @relation(fields: [propertyId], references: [id])
+  propertyId String
+
+  room   Room   @relation(fields: [roomId], references: [id])
+  roomId String
+
+  // Penerima Tamu / Resepsionis
+  checkInReceptionist    User   @relation("CheckInBy", fields: [checkInReceptionistId], references: [id])
+  checkInReceptionistId  String
+
+  checkOutReceptionist   User?  @relation("CheckOutBy", fields: [checkOutReceptionistId], references: [id])
+  checkOutReceptionistId String?
+
+  // Denda barang yang diterapkan ke booking ini
+  appliedFineItems AppliedFineItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Tabel perantara untuk mencatat denda barang apa saja yang dikenakan
+// saat check-out
+model AppliedFineItem {
+  id        String   @id @default(cuid())
+  quantity  Int      @default(1)
+  priceAtTimeOfFine Decimal // Harga item saat denda diberikan
+
+  // Relasi
+  booking   Booking  @relation(fields: [bookingId], references: [id])
+  bookingId String
+
+  fineItem   FineItem @relation(fields: [fineItemId], references: [id])
+  fineItemId String
+
+  createdAt DateTime @default(now())
+}
